@@ -19,6 +19,9 @@ classifiers = [
 ]
 dependencies = ["google-genai>=1.0.0"]
 
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
 [project.urls]
 Homepage = "https://github.com/jatizon/gemini-mcp-agent"
 Issues = "https://github.com/jatizon/gemini-mcp-agent/issues"
