@@ -134,11 +134,62 @@ Lists available skill profiles with descriptions and permission modes.
 
 ### Permission modes
 
-| Mode        | Tools available                             |
-| ----------- | ------------------------------------------- |
-| `read_only` | read + todo tools (default)                 |
-| `edit`      | read + edit + todo tools                    |
-| `full`      | all tools including bash and test execution |
+| Mode        | Tools available                | Use case                                    |
+| ----------- | ------------------------------ | ------------------------------------------- |
+| `read_only` | read + todo (default)          | Code review, architecture mapping, analysis |
+| `edit`      | read + edit + todo             | Documentation writing, simple refactors     |
+| `verify`    | read + edit + test/lint + todo | Test writing, refactoring with validation   |
+| `full`      | all tools including bash       | Unconstrained analysis (use with care)      |
+
+#### `gemini_task` — Fan-out/fan-in
+
+Run multiple Gemini agents with different skills simultaneously:
+
+```
+gemini_task(
+    tasks=[
+        {"skill": "code-reviewer", "task": "Review the auth module"},
+        {"skill": "security-auditor", "task": "Audit the auth module"},
+        {"skill": "architecture-mapper", "task": "Map the auth dependencies"}
+    ],
+    project_root="/path/to/project",
+    mode="parallel",
+    synthesize=true
+)
+```
+
+Returns a synthesized summary plus individual results from each agent.
+
+### Dry-run patch mode
+
+Edit tools support `dry_run: true` to preview changes without modifying files:
+
+```
+edit_file(path="src/app.py", old_string="foo", new_string="bar", dry_run=true)
+→ Returns unified diff without touching the file
+```
+
+## Claude-like Subagents
+
+This is not a native Claude Code subagent — it's an **MCP-powered Gemini subagent runtime** that simulates the pattern. The experience for the user is similar:
+
+```
+Claude Code (main)
+  └── calls gemini_agent or gemini_task
+        └── picks skill: code-reviewer
+              └── Gemini runs in isolated session
+                    ├── read_file, grep_search (read_only)
+                    ├── edit_file, run_tests (if verify/edit)
+                    └── returns structured summary to Claude
+```
+
+**Recommended workflow:**
+
+1. `implementation-planner` — plan changes (read_only)
+2. `refactorer` or `test-writer` — apply changes (verify mode)
+3. `run_tests` validates automatically
+4. `final-reviewer` — review the diff (read_only)
+5. Claude main decides the final result
 
 ## Architecture
 
