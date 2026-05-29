@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from .tools import EDIT_TOOLS, EXEC_TOOLS, READ_TOOLS, TODO_TOOLS
+from .tools import EDIT_TOOLS, EXEC_TOOLS, READ_TOOLS, TODO_TOOLS, VERIFY_TOOLS
 
 PERMISSION_PRESETS = {
     "read_only": READ_TOOLS | TODO_TOOLS,
     "edit": READ_TOOLS | EDIT_TOOLS | TODO_TOOLS,
+    "verify": READ_TOOLS | EDIT_TOOLS | VERIFY_TOOLS | TODO_TOOLS,
     "full": READ_TOOLS | EDIT_TOOLS | EXEC_TOOLS | TODO_TOOLS,
 }
 

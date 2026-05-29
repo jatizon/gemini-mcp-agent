@@ -50,8 +50,8 @@ def _build_tools_list() -> list[dict]:
                     },
                     "permission_mode": {
                         "type": "string",
-                        "enum": ["read_only", "edit", "full"],
-                        "description": "Permission level: read_only (default), edit (can modify files), full (edit + bash/tests)",
+                        "enum": ["read_only", "edit", "verify", "full"],
+                        "description": "Permission level: read_only (default), edit (modify files), verify (edit + test/lint), full (all)",
                     },
                     "allow_bash": {
                         "type": "boolean",
@@ -95,6 +95,39 @@ def _build_tools_list() -> list[dict]:
                 },
             },
         },
+        {
+            "name": "gemini_task",
+            "description": (
+                "Run multiple Gemini agents in parallel or sequential with different skills. "
+                "Use for fan-out analysis: e.g. code-reviewer + security-auditor + architecture-mapper "
+                "running simultaneously, with an optional synthesized summary."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "tasks": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "skill": {"type": "string"},
+                                "task": {"type": "string"},
+                                "files": {"type": "array", "items": {"type": "string"}},
+                                "permission_mode": {"type": "string"},
+                                "max_turns": {"type": "integer"},
+                                "model": {"type": "string"},
+                            },
+                            "required": ["task"],
+                        },
+                    },
+                    "project_root": {"type": "string", "description": "Absolute path to project root"},
+                    "mode": {"type": "string", "enum": ["parallel", "sequential"], "description": "Execution mode (default: parallel)"},
+                    "synthesize": {"type": "boolean", "description": "Produce a final synthesis (default: true)"},
+                    "model": {"type": "string", "description": "Default model for all tasks"},
+                },
+                "required": ["tasks", "project_root"],
+            },
+        },
     ]
 
 
@@ -105,6 +138,8 @@ def _handle_tool(name: str, args: dict) -> str:
         return _handle_gemini_status(args)
     if name == "gemini_skills":
         return _handle_gemini_skills(args)
+    if name == "gemini_task":
+        return _handle_gemini_task(args)
     raise ValueError(f"Unknown tool: {name}")
 
 
@@ -177,6 +212,43 @@ def _handle_gemini_skills(args: dict) -> str:
     return "Available skills:\n" + "\n".join(lines)
 
 
+def _handle_gemini_task(args: dict) -> str:
+    from .agent_loop import run_multi_agent
+
+    tasks = args.get("tasks")
+    project_root = args.get("project_root", ".")
+    if not tasks:
+        raise ValueError("Missing required argument: tasks")
+
+    api_key = load_api_key()
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY not found.")
+
+    result = run_multi_agent(
+        api_key=api_key,
+        tasks=tasks,
+        project_root=project_root,
+        mode=args.get("mode", "parallel"),
+        synthesize=args.get("synthesize", True),
+        model=args.get("model"),
+    )
+
+    parts = []
+    if result.get("summary"):
+        parts.append(result["summary"])
+    parts.append("\n---")
+    meta = result.get("meta", {})
+    parts.append(
+        f"Mode: {meta.get('mode')} | Tasks: {meta.get('task_count')} | "
+        f"OK: {meta.get('ok_count')} | Cost: ${meta.get('total_cost_usd', 0):.4f} | "
+        f"Time: {meta.get('duration_ms')}ms"
+    )
+    for r in result.get("results", []):
+        status_icon = "ok" if r.get("status") == "ok" else "FAIL"
+        parts.append(f"  [{status_icon}] {r.get('skill', '?')}: {r.get('summary', '')[:200]}")
+    return "\n".join(parts)
+
+
 def main() -> None:
     api_key = load_api_key()
     if not api_key:
@@ -188,5 +260,5 @@ def main() -> None:
 
     tools = _build_tools_list()
     server = McpServer(tools, _handle_tool)
-    print(f"[{__package__}] MCP server started (stdio) — 3 tools, skills enabled", file=sys.stderr)
+    print(f"[{__package__}] MCP server started (stdio) — 4 tools, skills enabled", file=sys.stderr)
     server.run()

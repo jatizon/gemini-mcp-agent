@@ -1,7 +1,7 @@
 ---
 name: test-writer
 description: Writes or improves tests for the project.
-permission_mode: edit
+permission_mode: verify
 tools: read_file, read_file_range, grep_search, glob_files, list_directory, project_map, edit_file, multi_edit_file, run_tests
 ---
 
