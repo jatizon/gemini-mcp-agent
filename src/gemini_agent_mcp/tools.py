@@ -7,8 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .config import BASH_TIMEOUT_S, GLOB_MAX_MATCHES
-from .safety import check_bash_forbidden, safe_resolve, truncate
+from .config import BASH_MODE, BASH_TIMEOUT_S, GLOB_MAX_MATCHES
+from .safety import BASH_ALLOWED_PREFIXES, check_bash_allowed, check_bash_forbidden, safe_resolve, truncate
 
 _RG_PATH = shutil.which("rg")
 
@@ -154,9 +154,13 @@ def _exec_bash_command(args: dict, root: Path, allow_bash: bool) -> str:
     cmd = args.get("cmd", "")
     if not cmd:
         return "ERROR: missing 'cmd' argument"
-    forbidden = check_bash_forbidden(cmd)
-    if forbidden:
-        return f"ERROR: forbidden pattern in command: '{forbidden}'"
+    if BASH_MODE == "allowlist":
+        if not check_bash_allowed(cmd):
+            return f"ERROR: command not in allowlist. Allowed prefixes: {', '.join(BASH_ALLOWED_PREFIXES[:10])}..."
+    else:
+        forbidden = check_bash_forbidden(cmd)
+        if forbidden:
+            return f"ERROR: forbidden pattern in command: '{forbidden}'"
     try:
         res = subprocess.run(
             cmd, shell=True, capture_output=True, text=True,

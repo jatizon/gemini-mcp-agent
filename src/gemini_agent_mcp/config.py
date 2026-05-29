@@ -30,6 +30,7 @@ PRICING_USD_PER_1M = {
 TOOL_OUTPUT_MAX_CHARS = 100_000
 BASH_TIMEOUT_S = 30
 GLOB_MAX_MATCHES = 500
+BASH_MODE = os.environ.get("GEMINI_AGENT_BASH_MODE", "blocklist")
 
 
 def load_api_key() -> str | None:
