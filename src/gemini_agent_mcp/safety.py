@@ -56,6 +56,31 @@ def check_bash_allowed(cmd: str) -> bool:
     return False
 
 
+EXEC_ALLOWED_PREFIXES = (
+    "pytest", "python -m pytest", "python3 -m pytest",
+    "npm test", "pnpm test", "yarn test", "bun test",
+    "go test", "cargo test", "make test",
+    "ruff check", "ruff format --check", "flake8", "black --check",
+    "mypy", "pyright", "tsc --noEmit",
+    "cargo clippy", "golangci-lint run",
+    "jest", "vitest", "mocha",
+)
+
+_EXEC_DANGEROUS = (";", "&&", "||", "|", ">", ">>", "<", "`", "$(", "${")
+
+
+def check_exec_allowed(cmd: str) -> bool:
+    """Check if a command is safe to run as test/lint/typecheck."""
+    stripped = cmd.strip()
+    for danger in _EXEC_DANGEROUS:
+        if danger in stripped:
+            return False
+    for prefix in EXEC_ALLOWED_PREFIXES:
+        if stripped == prefix or stripped.startswith(prefix + " ") or stripped.startswith(prefix + "\t"):
+            return True
+    return False
+
+
 def truncate(s: str, limit: int = TOOL_OUTPUT_MAX_CHARS) -> str:
     if len(s) <= limit:
         return s

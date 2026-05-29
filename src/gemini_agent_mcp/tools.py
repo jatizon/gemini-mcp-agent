@@ -10,14 +10,15 @@ import sys
 from pathlib import Path
 
 from .config import BASH_MODE, BASH_TIMEOUT_S, GLOB_MAX_MATCHES
-from .safety import BASH_ALLOWED_PREFIXES, check_bash_allowed, check_bash_forbidden, safe_resolve, truncate
+from .safety import BASH_ALLOWED_PREFIXES, check_bash_allowed, check_bash_forbidden, check_exec_allowed, safe_resolve, truncate
 
 _RG_PATH = shutil.which("rg")
 
 # --- Tool categories for permission filtering ---
 READ_TOOLS = {"read_file", "read_file_range", "list_directory", "glob_files", "grep_search", "project_map", "analyze_diff"}
 EDIT_TOOLS = {"edit_file", "multi_edit_file"}
-EXEC_TOOLS = {"bash_command", "run_tests", "run_lint", "run_typecheck"}
+VERIFY_TOOLS = {"run_tests", "run_lint", "run_typecheck"}
+EXEC_TOOLS = {"bash_command"} | VERIFY_TOOLS
 TODO_TOOLS = {"todo_write", "todo_read"}
 
 TOOL_SPECS = {
@@ -66,11 +67,13 @@ TOOL_SPECS = {
         },
     },
     "glob_files": {
-        "description": "List files matching a glob pattern (e.g. '**/*.py', 'src/**/*.ts').",
+        "description": "List files matching a glob pattern. Respects .gitignore when ripgrep is available.",
         "parameters": {
             "type": "object",
             "properties": {
-                "pattern": {"type": "string", "description": "Glob pattern"},
+                "pattern": {"type": "string", "description": "Glob pattern (e.g. '**/*.py')"},
+                "limit": {"type": "integer", "description": "Max results (default: 500)"},
+                "include_hidden": {"type": "boolean", "description": "Include hidden/ignored files (default: false)"},
             },
             "required": ["pattern"],
         },
@@ -84,6 +87,7 @@ TOOL_SPECS = {
                 "old_string": {"type": "string", "description": "Exact string to find and replace"},
                 "new_string": {"type": "string", "description": "Replacement string"},
                 "replace_all": {"type": "boolean", "description": "Replace all occurrences (default: false)"},
+                "dry_run": {"type": "boolean", "description": "Preview diff without modifying file (default: false)"},
             },
             "required": ["path", "old_string", "new_string"],
         },
@@ -106,6 +110,7 @@ TOOL_SPECS = {
                     },
                     "description": "List of {old_string, new_string} edits to apply in order",
                 },
+                "dry_run": {"type": "boolean", "description": "Preview diff without modifying file (default: false)"},
             },
             "required": ["path", "edits"],
         },
@@ -347,16 +352,43 @@ def _exec_grep_search(args: dict, root: Path, _ab: bool) -> str:
     return truncate(out)
 
 
+_GLOB_EXCLUDES = {".git", "node_modules", ".venv", "__pycache__", "dist", "build",
+                   ".next", ".tox", ".mypy_cache", ".ruff_cache", ".pytest_cache",
+                   ".eggs", "*.egg-info", ".cache", "coverage", ".coverage"}
+
+
 def _exec_glob_files(args: dict, root: Path, _ab: bool) -> str:
     pattern = args.get("pattern", "")
     if not pattern:
         return "ERROR: missing 'pattern' argument"
+    limit = args.get("limit", GLOB_MAX_MATCHES)
+    include_hidden = args.get("include_hidden", False)
+    if _RG_PATH and not include_hidden:
+        try:
+            cmd = [_RG_PATH, "--files", "-g", pattern, str(root)]
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if res.stdout.strip():
+                matches = sorted(res.stdout.strip().splitlines())[:limit]
+                rel = []
+                for m in matches:
+                    try:
+                        rel.append(str(Path(m).relative_to(root)))
+                    except ValueError:
+                        rel.append(m)
+                return "\n".join(rel) if rel else f"(no matches for pattern='{pattern}')"
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
     try:
-        matches = sorted(
-            str(p.relative_to(root))
-            for p in root.glob(pattern)
-            if not p.is_dir()
-        )[:GLOB_MAX_MATCHES]
+        all_matches = []
+        for p in root.glob(pattern):
+            if p.is_dir():
+                continue
+            if not include_hidden:
+                parts = p.relative_to(root).parts
+                if any(part in _GLOB_EXCLUDES or part.startswith(".") for part in parts):
+                    continue
+            all_matches.append(str(p.relative_to(root)))
+        matches = sorted(all_matches)[:limit]
     except OSError as exc:
         return f"ERROR: glob failed: {exc}"
     if not matches:
@@ -367,10 +399,12 @@ def _exec_glob_files(args: dict, root: Path, _ab: bool) -> str:
 # --- Edit tools ---
 
 def _exec_edit_file(args: dict, root: Path, _ab: bool) -> str:
+    import difflib
     path = args.get("path", "")
     old = args.get("old_string", "")
     new = args.get("new_string", "")
     replace_all = args.get("replace_all", False)
+    dry_run = args.get("dry_run", False)
     if not path:
         return "ERROR: missing 'path' argument"
     if not old:
@@ -389,17 +423,22 @@ def _exec_edit_file(args: dict, root: Path, _ab: bool) -> str:
         return f"ERROR: old_string not found in {path}"
     if count > 1 and not replace_all:
         return f"ERROR: old_string found {count} times in {path}. Use replace_all=true to replace all."
-    if replace_all:
-        new_content = content.replace(old, new)
-    else:
-        new_content = content.replace(old, new, 1)
+    new_content = content.replace(old, new) if replace_all else content.replace(old, new, 1)
+    if dry_run:
+        diff = "".join(difflib.unified_diff(
+            content.splitlines(keepends=True), new_content.splitlines(keepends=True),
+            fromfile=f"a/{path}", tofile=f"b/{path}",
+        ))
+        return f"[DRY RUN] would_edit: true\n{diff}" if diff else "[DRY RUN] no changes"
     target.write_text(new_content, encoding="utf-8")
     return f"OK: replaced {count if replace_all else 1} occurrence(s) in {path}"
 
 
 def _exec_multi_edit_file(args: dict, root: Path, _ab: bool) -> str:
+    import difflib
     path = args.get("path", "")
     edits = args.get("edits", [])
+    dry_run = args.get("dry_run", False)
     if not path:
         return "ERROR: missing 'path' argument"
     if not edits:
@@ -410,9 +449,10 @@ def _exec_multi_edit_file(args: dict, root: Path, _ab: bool) -> str:
     if not target.exists():
         return f"ERROR: file not found: {path}"
     try:
-        content = target.read_text(encoding="utf-8")
+        original = target.read_text(encoding="utf-8")
     except UnicodeDecodeError:
         return f"ERROR: '{path}' is not UTF-8"
+    content = original
     applied = 0
     for i, edit in enumerate(edits):
         old = edit.get("old_string", "")
@@ -426,6 +466,12 @@ def _exec_multi_edit_file(args: dict, root: Path, _ab: bool) -> str:
             return f"ERROR: edit {i} old_string found {count} times in {path}"
         content = content.replace(old, new, 1)
         applied += 1
+    if dry_run:
+        diff = "".join(difflib.unified_diff(
+            original.splitlines(keepends=True), content.splitlines(keepends=True),
+            fromfile=f"a/{path}", tofile=f"b/{path}",
+        ))
+        return f"[DRY RUN] would_edit: true, {applied} edits\n{diff}" if diff else "[DRY RUN] no changes"
     target.write_text(content, encoding="utf-8")
     return f"OK: applied {applied} edits to {path}"
 
@@ -466,21 +512,27 @@ def _exec_project_map(args: dict, root: Path, _ab: bool) -> str:
 # --- Execution tools ---
 
 def _exec_run_cmd(args: dict, root: Path, _ab: bool, cmd_key: str) -> str:
+    import shlex
     from .project_detect import detect_project
     cmd = args.get("command")
+    user_provided = cmd is not None
     if not cmd:
         info = detect_project(root)
         cmd = info.get(cmd_key)
         if not cmd:
             return f"ERROR: could not auto-detect {cmd_key}. Pass 'command' explicitly."
+    if user_provided and not check_exec_allowed(cmd):
+        return f"ERROR: command not in exec allowlist: '{cmd}'. Only test/lint/typecheck commands are allowed."
     timeout = 120 if cmd_key == "test_cmd" else 60
     try:
         res = subprocess.run(
-            cmd, shell=True, capture_output=True, text=True,
+            shlex.split(cmd), shell=False, capture_output=True, text=True,
             timeout=timeout, cwd=str(root),
         )
     except subprocess.TimeoutExpired:
         return f"ERROR: command timeout ({timeout}s)"
+    except (FileNotFoundError, ValueError) as exc:
+        return f"ERROR: failed to run command: {exc}"
     out = res.stdout
     if res.stderr:
         out = (out or "") + f"\n[stderr]\n{res.stderr[:10000]}"
