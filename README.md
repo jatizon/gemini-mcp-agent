@@ -37,8 +37,8 @@ claude mcp add gemini-agent -s user -- \
 ### From source
 
 ```bash
-git clone https://github.com/your-user/gemini-agent-mcp.git
-cd gemini-agent-mcp
+git clone https://github.com/jatizon/gemini-mcp-agent.git
+cd gemini-mcp-agent
 pip install -e .
 
 # Then add to Claude Code:

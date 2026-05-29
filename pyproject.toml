@@ -20,8 +20,8 @@ classifiers = [
 dependencies = ["google-genai>=1.0.0"]
 
 [project.urls]
-Homepage = "https://github.com/josealberto/gemini-agent-mcp"
-Issues = "https://github.com/josealberto/gemini-agent-mcp/issues"
+Homepage = "https://github.com/jatizon/gemini-mcp-agent"
+Issues = "https://github.com/jatizon/gemini-mcp-agent/issues"
 
 [tool.setuptools.packages.find]
 where = ["src"]
