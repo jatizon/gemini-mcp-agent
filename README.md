@@ -55,46 +55,90 @@ claude mcp add gemini-agent -s user -- \
 
 ## Usage
 
-Once installed, Claude Code can use the Gemini agent automatically. You can also ask explicitly:
+Once installed, Claude Code can use the Gemini agent automatically:
 
 ```
-Use the gemini_agent tool to analyze the authentication flow in this project
+Use the gemini code-reviewer skill to review the auth module
 ```
+
+### Skills
+
+Skills are specialized agent profiles with tailored prompts and tool permissions:
+
+```
+gemini_agent(skill="code-reviewer", task="Review this PR for bugs")
+gemini_agent(skill="test-writer", task="Add tests for the auth module")
+gemini_agent(skill="refactorer", task="Simplify the database layer")
+```
+
+Built-in skills:
+
+| Skill                 | Mode      | Focus                                     |
+| --------------------- | --------- | ----------------------------------------- |
+| `code-reviewer`       | read_only | Bugs, regressions, edge cases             |
+| `bug-hunter`          | read_only | Logic errors, off-by-one, race conditions |
+| `security-auditor`    | read_only | OWASP, auth, injection, secrets           |
+| `test-writer`         | edit      | Write/improve tests, verify they pass     |
+| `refactorer`          | edit      | Simplify, extract, reduce duplication     |
+| `docs-writer`         | edit      | README, inline docs, API reference        |
+| `architecture-mapper` | read_only | Components, data flow, dependencies       |
+| `dependency-auditor`  | read_only | Outdated packages, vulnerabilities        |
+
+Use `gemini_skills()` to list available skills. Add custom skills to `~/.gemini-agent-mcp/skills/`.
 
 ### Tools exposed to Claude Code
 
 #### `gemini_agent`
 
-Run Gemini as an autonomous agent that reads files, searches code, and returns analysis.
-
-| Parameter      | Type     | Required | Default          | Description                      |
-| -------------- | -------- | -------- | ---------------- | -------------------------------- |
-| `task`         | string   | yes      | -                | The analysis task                |
-| `project_root` | string   | no       | cwd              | Sandbox boundary (absolute path) |
-| `files`        | string[] | no       | -                | Specific files to focus on       |
-| `max_turns`    | integer  | no       | 15               | Max agent loop iterations        |
-| `allow_bash`   | boolean  | no       | false            | Enable bash commands             |
-| `session_id`   | string   | no       | auto             | Resume a previous session        |
-| `model`        | string   | no       | gemini-3.5-flash | Gemini model to use              |
+| Parameter         | Type     | Required | Default          | Description                          |
+| ----------------- | -------- | -------- | ---------------- | ------------------------------------ |
+| `task`            | string   | yes      | -                | The task for Gemini                  |
+| `skill`           | string   | no       | -                | Skill profile (e.g. 'code-reviewer') |
+| `project_root`    | string   | no       | cwd              | Sandbox boundary                     |
+| `files`           | string[] | no       | -                | Specific files to focus on           |
+| `max_turns`       | integer  | no       | 15               | Max agent loop iterations            |
+| `permission_mode` | string   | no       | read_only        | read_only, edit, or full             |
+| `allow_bash`      | boolean  | no       | false            | Enable bash commands                 |
+| `session_id`      | string   | no       | auto             | Resume a previous session            |
+| `model`           | string   | no       | gemini-3.5-flash | Gemini model                         |
 
 #### `gemini_status`
-
-Show cost and usage stats.
 
 | Parameter    | Type    | Required | Default | Description             |
 | ------------ | ------- | -------- | ------- | ----------------------- |
 | `today_only` | boolean | no       | true    | Only show today's usage |
 
+#### `gemini_skills`
+
+Lists available skill profiles with descriptions and permission modes.
+
 ### Internal tools (used by Gemini, not exposed to Claude)
 
-These are the function-calling tools that Gemini uses autonomously during analysis:
+| Tool              | Mode | What it does                           |
+| ----------------- | ---- | -------------------------------------- |
+| `read_file`       | read | File content with line numbers         |
+| `read_file_range` | read | Specific line range from a file        |
+| `list_directory`  | read | Directory listing with sizes           |
+| `grep_search`     | read | Recursive grep with context lines      |
+| `glob_files`      | read | Pattern matching file list             |
+| `edit_file`       | edit | Replace exact string in file           |
+| `multi_edit_file` | edit | Batch edits atomically                 |
+| `analyze_diff`    | read | Git diff against base ref              |
+| `project_map`     | read | Auto-detect project type and structure |
+| `run_tests`       | exec | Run test suite (auto-detected)         |
+| `run_lint`        | exec | Run linter (auto-detected)             |
+| `run_typecheck`   | exec | Run type checker (auto-detected)       |
+| `bash_command`    | exec | Shell command (disabled by default)    |
+| `todo_write`      | any  | Track progress within session          |
+| `todo_read`       | any  | Read current task list                 |
 
-| Tool           | What it does                     | Safety                                       |
-| -------------- | -------------------------------- | -------------------------------------------- |
-| `read_file`    | Read a file from the project     | Path traversal blocked, 100KB cap            |
-| `grep_search`  | Recursive grep with line numbers | Sandboxed to project root, 30s timeout       |
-| `glob_files`   | List files matching a pattern    | Sandboxed, 500 match cap                     |
-| `bash_command` | Run a shell command              | **Disabled by default**. Blocklist enforced. |
+### Permission modes
+
+| Mode        | Tools available                             |
+| ----------- | ------------------------------------------- |
+| `read_only` | read + todo tools (default)                 |
+| `edit`      | read + edit + todo tools                    |
+| `full`      | all tools including bash and test execution |
 
 ## Architecture
 
