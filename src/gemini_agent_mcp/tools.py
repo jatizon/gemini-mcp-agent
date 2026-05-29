@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 from .config import BASH_TIMEOUT_S, GLOB_MAX_MATCHES
 from .safety import check_bash_forbidden, safe_resolve, truncate
+
+_RG_PATH = shutil.which("rg")
 
 TOOL_SPECS = {
     "read_file": {
@@ -114,11 +117,12 @@ def _exec_grep_search(args: dict, root: Path, _allow_bash: bool) -> str:
         return f"ERROR: path '{path_arg}' is outside project root"
     if not target.exists():
         return f"ERROR: path not found: {path_arg}"
+    if _RG_PATH:
+        cmd = [_RG_PATH, "-n", "--no-heading", "--", pattern, str(target)]
+    else:
+        cmd = ["grep", "-r", "-n", "-I", "--", pattern, str(target)]
     try:
-        res = subprocess.run(
-            ["grep", "-r", "-n", "-I", "--", pattern, str(target)],
-            capture_output=True, text=True, timeout=30,
-        )
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     except subprocess.TimeoutExpired:
         return "ERROR: grep timeout (30s)"
     out = res.stdout
