@@ -322,6 +322,7 @@ def run_multi_agent(
     synthesize: bool = True,
     model: str | None = None,
     skills_dir: str | None = None,
+    parallel_limit: int = 10,
 ) -> dict:
     """Run multiple agent tasks. Returns {status, summary, results, meta}."""
     t_start = time.perf_counter()
@@ -362,7 +363,7 @@ def run_multi_agent(
             }
 
     if mode == "parallel":
-        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(tasks), 4)) as pool:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(len(tasks), parallel_limit)) as pool:
             futures = [pool.submit(_run_one, t) for t in tasks]
             results = [f.result() for f in concurrent.futures.as_completed(futures)]
     else:

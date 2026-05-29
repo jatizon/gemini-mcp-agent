@@ -63,7 +63,8 @@ def _build_tools_list() -> list[dict]:
                     },
                     "model": {
                         "type": "string",
-                        "description": "Gemini model to use (default: gemini-3.5-flash)",
+                        "description": "Gemini model to use",
+                        "default": "gemini-3.5-flash",
                     },
                 },
                 "required": ["task"],
@@ -124,6 +125,7 @@ def _build_tools_list() -> list[dict]:
                     "mode": {"type": "string", "enum": ["parallel", "sequential"], "description": "Execution mode (default: parallel)"},
                     "synthesize": {"type": "boolean", "description": "Produce a final synthesis (default: true)"},
                     "model": {"type": "string", "description": "Default model for all tasks"},
+                    "parallel_limit": {"type": "integer", "description": "Max concurrent agents in parallel mode (default: 10)"},
                 },
                 "required": ["tasks", "project_root"],
             },
@@ -175,6 +177,7 @@ def _handle_gemini_agent(args: dict) -> str:
     if meta:
         parts.append("\n---")
         info = (
+            f"Model: {meta.get('model', 'gemini-3.5-flash')} | "
             f"Turns: {meta.get('turns', '?')} | "
             f"Tools: {meta.get('tool_calls', '?')} | "
             f"In: {meta.get('in_tokens', '?')} | "
@@ -231,6 +234,7 @@ def _handle_gemini_task(args: dict) -> str:
         mode=args.get("mode", "parallel"),
         synthesize=args.get("synthesize", True),
         model=args.get("model"),
+        parallel_limit=args.get("parallel_limit", 10),
     )
 
     parts = []
