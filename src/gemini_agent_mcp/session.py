@@ -8,7 +8,7 @@ from pathlib import Path
 
 from .config import SESSION_DIR
 
-_SESSION_MAX_AGE_S = 86400  # 24 hours
+_SESSION_MAX_AGE_S = 86400
 
 
 def load_session(session_id: str) -> list:
@@ -23,16 +23,19 @@ def load_session(session_id: str) -> list:
         return []
 
 
-def save_session(session_id: str, history: list, types_mod) -> None:
-    """Save conversation history for a session."""
+def save_session(session_id: str, history: list, types_mod, extra: dict | None = None) -> None:
+    """Save conversation history and metadata for a session."""
     SESSION_DIR.mkdir(parents=True, exist_ok=True)
     path = _session_path(session_id)
     data = {
+        "version": 2,
         "session_id": session_id,
         "updated_at": time.time(),
         "turns": len(history),
         "history": _serialize_history(history),
     }
+    if extra:
+        data.update({k: v for k, v in extra.items() if v})
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     _cleanup_old_sessions()
 
@@ -43,7 +46,6 @@ def _session_path(session_id: str) -> Path:
 
 
 def _serialize_history(history: list) -> list[dict]:
-    """Convert genai Content objects to JSON-safe dicts."""
     result = []
     for content in history:
         role = getattr(content, "role", "user")
@@ -70,7 +72,6 @@ def _serialize_history(history: list) -> list[dict]:
 
 
 def _deserialize_history(data: list[dict]) -> list:
-    """Convert JSON dicts back to genai Content objects."""
     from google.genai import types
 
     history = []
@@ -95,7 +96,6 @@ def _deserialize_history(data: list[dict]) -> list:
 
 
 def _cleanup_old_sessions() -> None:
-    """Remove session files older than 24 hours."""
     if not SESSION_DIR.exists():
         return
     now = time.time()

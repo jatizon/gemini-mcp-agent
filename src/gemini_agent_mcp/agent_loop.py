@@ -15,10 +15,22 @@ from .config import (
     DEFAULT_TEMPERATURE,
 )
 from .cost import compute_cost, log_call
+from .permissions import get_allowed_tools
 from .session import load_session, save_session
 from .tools import build_function_declarations, execute_tool
 
 _TAG = "gemini-agent-mcp"
+
+_DEFAULT_SYSTEM = (
+    "You are a code analysis agent. You have access to tools for reading files, "
+    "searching code, and listing files. Use them to thoroughly investigate the task, "
+    "then provide a clear, concise analysis.\n\n"
+    "Rules:\n"
+    "- Use tools to gather evidence before drawing conclusions.\n"
+    "- Be specific: cite file paths and line numbers.\n"
+    "- Keep your final response concise and actionable.\n"
+    "- When you have enough information, stop using tools and give your final answer."
+)
 
 
 def _extract_function_calls(candidate):
@@ -48,6 +60,10 @@ def run_agent(
     allow_bash: bool = False,
     session_id: str | None = None,
     model: str | None = None,
+    skill: str | None = None,
+    permission_mode: str | None = None,
+    custom_tools: list[str] | None = None,
+    skills_dir: str | None = None,
 ) -> dict:
     """Run the Gemini agent loop. Returns {text, meta}."""
     from google import genai
@@ -60,8 +76,29 @@ def run_agent(
     if not root.exists() or not root.is_dir():
         raise ValueError(f"Invalid project_root: {root}")
 
+    system_instruction = _DEFAULT_SYSTEM
+    effective_permission = permission_mode or "read_only"
+    effective_model = model
+
+    if skill:
+        from .skill_loader import load_skill
+        skill_data = load_skill(skill, skills_dir)
+        if skill_data.get("system_prompt"):
+            system_instruction = skill_data["system_prompt"]
+        if skill_data.get("permission_mode"):
+            effective_permission = skill_data["permission_mode"]
+        if skill_data.get("model"):
+            effective_model = skill_data["model"]
+        if skill_data.get("tools"):
+            custom_tools = skill_data["tools"]
+
+    allowed = get_allowed_tools(effective_permission, custom_tools)
+
+    if allow_bash:
+        allowed.add("bash_command")
+
     client = genai.Client(api_key=api_key)
-    tools = build_function_declarations(types, allow_bash=allow_bash)
+    tools = build_function_declarations(types, allowed_tools=allowed, allow_bash=allow_bash)
 
     prompt_parts = [f"Task: {task}"]
     if files:
@@ -77,17 +114,6 @@ def run_agent(
         parts=[types.Part.from_text(text=prompt)],
     ))
 
-    system_instruction = (
-        "You are a code analysis agent. You have access to tools for reading files, "
-        "searching code, and listing files. Use them to thoroughly investigate the task, "
-        "then provide a clear, concise analysis.\n\n"
-        "Rules:\n"
-        "- Use tools to gather evidence before drawing conclusions.\n"
-        "- Be specific: cite file paths and line numbers.\n"
-        "- Keep your final response concise and actionable.\n"
-        "- When you have enough information, stop using tools and give your final answer."
-    )
-
     config = types.GenerateContentConfig(
         temperature=DEFAULT_TEMPERATURE,
         max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
@@ -95,20 +121,22 @@ def run_agent(
         system_instruction=system_instruction,
     )
 
+    session_state: dict = {}
     stats = {
         "turns": 0, "tool_calls": 0, "in_tokens": 0, "out_tokens": 0,
         "cost_usd": 0.0, "duration_ms": 0, "tools_used": [],
+        "files_read": [], "files_edited": [],
     }
     final_text = ""
     t_start = time.perf_counter()
 
     for turn in range(max_turns):
         stats["turns"] = turn + 1
-        _log_progress(turn + 1, max_turns)
+        _log_progress(turn + 1, max_turns, skill=skill)
 
         try:
             resp = client.models.generate_content(
-                model=model, contents=history, config=config,
+                model=effective_model, contents=history, config=config,
             )
         except Exception as exc:
             stats["error"] = str(exc)[:500]
@@ -131,7 +159,7 @@ def run_agent(
 
         if not calls:
             final_text = text
-            _log_progress(turn + 1, max_turns, done=True, text_len=len(text))
+            _log_progress(turn + 1, max_turns, done=True, text_len=len(text), skill=skill)
             break
 
         history.append(candidate.content)
@@ -145,10 +173,14 @@ def run_agent(
                 fc_args = {}
 
             _log_tool_call(turn + 1, name, fc_args)
-            result = execute_tool(name, fc_args, root, allow_bash)
+            result = execute_tool(name, fc_args, root, allow_bash, session_state)
 
             stats["tool_calls"] += 1
             stats["tools_used"].append(name)
+            if name in ("read_file", "read_file_range") and "path" in fc_args:
+                stats["files_read"].append(fc_args["path"])
+            elif name in ("edit_file", "multi_edit_file") and "path" in fc_args:
+                stats["files_edited"].append(fc_args["path"])
 
             response_parts.append(types.Part.from_function_response(
                 name=name, response={"result": result},
@@ -161,14 +193,23 @@ def run_agent(
         ) or f"Agent reached max turns ({max_turns}) without final answer."
 
     stats["duration_ms"] = int((time.perf_counter() - t_start) * 1000)
-    stats["cost_usd"] = compute_cost(model, stats["in_tokens"], stats["out_tokens"]) or 0.0
+    stats["cost_usd"] = compute_cost(effective_model, stats["in_tokens"], stats["out_tokens"]) or 0.0
 
-    save_session(session_id, history, types)
+    save_session(session_id, history, types, extra={
+        "skill": skill,
+        "task": task,
+        "files_read": list(set(stats["files_read"])),
+        "files_edited": list(set(stats["files_edited"])),
+        "tools_used": stats["tools_used"],
+        "todos": session_state.get("todos", []),
+        "final_summary": final_text[:2000],
+    })
 
     log_call({
-        "model": model,
+        "model": effective_model,
         "tag": _TAG,
         "mode": "agent-loop",
+        "skill": skill,
         "turns": stats["turns"],
         "tool_calls_count": stats["tool_calls"],
         "in_tokens": stats["in_tokens"],
@@ -191,15 +232,19 @@ def run_agent(
             "cost_usd": stats["cost_usd"],
             "duration_ms": stats["duration_ms"],
             "session_id": session_id,
+            "skill": skill,
+            "files_read": list(set(stats["files_read"])),
+            "files_edited": list(set(stats["files_edited"])),
         },
     }
 
 
-def _log_progress(turn: int, max_turns: int, done: bool = False, text_len: int = 0) -> None:
+def _log_progress(turn: int, max_turns: int, done: bool = False, text_len: int = 0, skill: str | None = None) -> None:
+    prefix = f"[gemini-agent:{skill}]" if skill else "[gemini-agent]"
     if done:
-        print(f"[gemini-agent] turn {turn}/{max_turns} | final answer ({text_len} chars)", file=sys.stderr)
+        print(f"{prefix} turn {turn}/{max_turns} | final answer ({text_len} chars)", file=sys.stderr)
     else:
-        print(f"[gemini-agent] turn {turn}/{max_turns} ...", file=sys.stderr)
+        print(f"{prefix} turn {turn}/{max_turns} ...", file=sys.stderr)
 
 
 def _log_tool_call(turn: int, name: str, args: dict) -> None:
